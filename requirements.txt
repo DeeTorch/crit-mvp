@@ -1,0 +1,7 @@
+instructor
+google-genai
+mistune
+pydantic
+python-dotenv
+nest-asyncio
+jsonref
