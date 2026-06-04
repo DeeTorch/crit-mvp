@@ -51,6 +51,17 @@ repos:
 
 ---
 
+## 🤖 CI/CD Integration (GitHub Actions)
+
+CRIT can be integrated into your CI/CD pipeline to automatically audit Pull Requests.
+
+1.  **Add Secret**: Add your `GEMINI_API_KEY` as a GitHub Secret in your repository settings.
+2.  **Workflow**: CRIT will automatically run on PRs, analyze only the modified code (`--diff`), and post the audit report as a comment if the quality threshold is not met.
+
+The workflow file is located at `.github/workflows/crit-audit.yml`.
+
+---
+
 ## ⚙️ Configuration (`crit.yaml`)
 
 You can customize CRIT's behavior by adding a `crit.yaml` file to your project root. This allows you to set custom quality thresholds, change metrics, and inject team standards.
