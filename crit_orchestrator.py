@@ -14,6 +14,7 @@ structured Pydantic output validation.
 
 from __future__ import annotations
 
+import argparse
 import ast
 import asyncio
 import logging
@@ -26,6 +27,25 @@ from typing import Optional
 import nest_asyncio
 from dotenv import load_dotenv
 from pydantic import BaseModel, Field
+
+# ── Custom Exceptions ─────────────────────────────────────────────────────────
+
+
+class ASTParsingError(Exception):
+    """Custom exception raised when Python AST parsing fails."""
+
+    def __init__(
+        self,
+        message: str,
+        line: Optional[int],
+        offset: Optional[int],
+        text: Optional[str],
+    ):
+        super().__init__(message)
+        self.message = message
+        self.line = line
+        self.offset = offset
+        self.text = text
 
 # ── Environment ──────────────────────────────────────────────────────────────
 
@@ -172,10 +192,27 @@ QUALITY_CRITERIA = [
 ]
 
 
-def parse_ast_elements(source: str) -> list[dict]:
+def parse_ast_elements(source: str, filename: str = "<unknown>") -> list[dict]:
     """Parse Python source code and extract structural elements."""
     log.info("🌳 AST Parsing Phase — parsing source code")
-    tree = ast.parse(source)
+    try:
+        tree = ast.parse(source, filename=filename)
+    except SyntaxError as e:
+        log.error("❌ AST Parsing Failure: SyntaxError encountered.")
+        raise ASTParsingError(
+            message=e.msg,
+            line=e.lineno,
+            offset=e.offset,
+            text=e.text,
+        ) from e
+    except Exception as e:
+        log.error("❌ AST Parsing Failure: Unexpected parser error.")
+        raise ASTParsingError(
+            message=str(e),
+            line=None,
+            offset=None,
+            text=None,
+        ) from e
 
     elements: list[dict] = []
     for node in ast.walk(tree):
@@ -337,15 +374,156 @@ async def reduce_phase(
 # ── Main Pipeline ────────────────────────────────────────────────────────────
 
 
-async def run_pipeline() -> FinalVerdict:
+def export_markdown_report(
+    verdict: FinalVerdict,
+    analyses: list[ElementAnalysis],
+    target_file: str,
+):
+    """Generate a beautifully formatted CRIT_Audit_Report.md markdown file."""
+    from datetime import datetime
+
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    report_content = f"""# CRIT Quality Audit Report
+
+**Date of Audit:** {timestamp}  
+**Target File:** `{target_file}`  
+
+---
+
+## 📊 Executive Summary
+
+| Metric | Value |
+| :--- | :--- |
+| **Overall Quality Score** | {verdict.overall_score:.1f} / 10.0 |
+| **Final Grade** | **{verdict.grade}** |
+| **Total Elements Audited** | {verdict.element_count} |
+
+### Actionable Recommendation
+> [!NOTE]
+> {verdict.recommendation}
+
+---
+
+## 🎯 Key Findings
+
+### Top Strengths
+{chr(10).join(f"- ✅ **{s}**" for s in verdict.top_strengths) if verdict.top_strengths else "- None identified."}
+
+### Top Weaknesses
+{chr(10).join(f"- ⚠️ **{w}**" for w in verdict.top_weaknesses) if verdict.top_weaknesses else "- None identified."}
+
+---
+
+## 🗺️ Map Pass: Element-Level Breakdown
+
+"""
+    if not analyses:
+        report_content += "*No individual classes or functions were evaluated.*\n"
+    else:
+        for idx, a in enumerate(analyses, 1):
+            avg_score = sum(s.score for s in a.scores) / max(len(a.scores), 1)
+            report_content += f"### {idx}. `{a.element_name}` ({a.element_type})\n"
+            report_content += f"**Average Score:** {avg_score:.1f} / 10.0\n\n"
+            report_content += "| Criterion | Severity | Score | Rationale |\n"
+            report_content += "| :--- | :--- | :--- | :--- |\n"
+            for s in a.scores:
+                report_content += (
+                    f"| {s.criterion} | `{s.severity.value}` | {s.score}/10 | {s.rationale} |\n"
+                )
+            report_content += f"\n*Summary:* {a.summary}\n\n"
+            report_content += "---\n\n"
+
+    report_path = "CRIT_Audit_Report.md"
+    try:
+        with open(report_path, "w", encoding="utf-8") as f:
+            f.write(report_content)
+        log.info(f"✨ Beautiful audit report exported successfully to: {report_path}")
+    except Exception as e:
+        log.error(f"Failed to write markdown report to {report_path}: {e}")
+
+
+def export_ast_failure_report(error: ASTParsingError, target_file: str):
+    """Generate a structured AST Failure report in CRIT_Audit_Report.md."""
+    from datetime import datetime
+
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    report_content = f"""# CRIT Quality Audit Report
+
+**Date of Audit:** {timestamp}  
+**Target File:** `{target_file}`  
+
+---
+
+## ❌ AST Failure Report
+
+The CRIT pipeline could not parse the target source code because of a syntax error.
+
+### Error Details
+
+- **Error Type:** `SyntaxError` / AST Parsing Failure
+- **Message:** {error.message}
+- **Line Number:** {error.line if error.line is not None else "Unknown"}
+- **Offset:** {error.offset if error.offset is not None else "Unknown"}
+
+"""
+    if error.text:
+        report_content += f"""### Code Snippet
+```python
+{error.text.rstrip()}
+{" " * (error.offset - 1 if error.offset else 0)}^ (Error location)
+```
+"""
+    report_content += """
+---
+> [!CAUTION]
+> Please fix the Python syntax errors in the target file before running the CRIT audit again.
+"""
+
+    report_path = "CRIT_Audit_Report.md"
+    try:
+        with open(report_path, "w", encoding="utf-8") as f:
+            f.write(report_content)
+        log.error("===========================================")
+        log.error("     ❌ CRIT PIPELINE: AST FAILURE         ")
+        log.error("===========================================")
+        log.error(f"File:      {target_file}")
+        log.error(f"Error:     {error.message}")
+        log.error(f"Line:      {error.line}")
+        log.error(f"Position:  {error.offset}")
+        log.error(f"Structured failure report written to: {report_path}")
+        log.error("===========================================")
+    except Exception as e:
+        log.error(f"Failed to write AST failure report to {report_path}: {e}")
+
+
+async def run_pipeline(
+    source_code: str, filename: str
+) -> tuple[FinalVerdict, list[ElementAnalysis]]:
     """Execute the full CRIT pipeline: Parse → Map → Reduce."""
     log.info("=" * 60)
     log.info("🚀 CRIT Protocol Orchestrator — Starting Pipeline")
-    log.info("   Model:  %s", TARGET_MODEL)
+    log.info("   Model:   %s", TARGET_MODEL)
+    log.info("   Target:  %s", filename)
     log.info("=" * 60)
 
     # Phase 1 — AST Parsing
-    elements = parse_ast_elements(SAMPLE_CODE)
+    elements = parse_ast_elements(source_code, filename)
+
+    if not elements:
+        log.warning(
+            "⚠️ No top-level class or function elements found in source code."
+        )
+        verdict = FinalVerdict(
+            overall_score=10.0,
+            grade="A",
+            top_strengths=["No elements to analyze"],
+            top_weaknesses=[],
+            recommendation="No functions or classes found to evaluate.",
+            element_count=0,
+        )
+        return verdict, []
 
     # Phase 2 — Build client
     client = _build_client()
@@ -372,17 +550,51 @@ async def run_pipeline() -> FinalVerdict:
     log.info("   Recommendation: %s", verdict.recommendation)
     log.info("=" * 60)
 
-    return verdict
+    return verdict, analyses
 
 
 def main():
     """Entry point — apply nest_asyncio and run the pipeline."""
+    parser = argparse.ArgumentParser(
+        description="CRIT Protocol Orchestrator CLI"
+    )
+    parser.add_argument(
+        "--target",
+        type=str,
+        help="Path to the target Python file to analyze. If not provided, inline sample code is used.",
+    )
+    args = parser.parse_args()
+
     nest_asyncio.apply()
-    verdict = asyncio.run(run_pipeline())
-    # Final Pydantic validation proof
-    log.info("✅ Pydantic validation passed — verdict model dump:")
-    for k, v in verdict.model_dump().items():
-        log.info("   %s: %s", k, v)
+
+    source_code = SAMPLE_CODE
+    filename = "<inline_sample>"
+    if args.target:
+        if not os.path.exists(args.target):
+            log.error(f"Target file not found: {args.target}")
+            sys.exit(1)
+        try:
+            with open(args.target, "r", encoding="utf-8") as f:
+                source_code = f.read()
+            filename = args.target
+        except Exception as e:
+            log.error(f"Failed to read target file {args.target}: {e}")
+            sys.exit(1)
+
+    try:
+        verdict, analyses = asyncio.run(run_pipeline(source_code, filename))
+        export_markdown_report(verdict, analyses, filename)
+
+        # Final Pydantic validation proof
+        log.info("✅ Pydantic validation passed — verdict model dump:")
+        for k, v in verdict.model_dump().items():
+            log.info("   %s: %s", k, v)
+    except ASTParsingError as e:
+        export_ast_failure_report(e, filename)
+        sys.exit(1)
+    except Exception as e:
+        log.error(f"Pipeline failed: {e}", exc_info=True)
+        sys.exit(1)
 
 
 if __name__ == "__main__":
