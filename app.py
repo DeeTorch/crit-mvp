@@ -8,6 +8,8 @@ from crit_orchestrator import (
     CritConfig,
     ASTParsingError,
     get_git_diff_mapping,
+    extract_skeleton,
+    scrub_sensitive_data,
 )
 
 # ── Page Configuration ────────────────────────────────────────────────────────
@@ -34,6 +36,9 @@ metrics = st.sidebar.multiselect(
 custom_instr = st.sidebar.text_area("Custom Instructions", placeholder="e.g., Favor strict typing.")
 
 run_audit = st.sidebar.button("Run Audit", type="primary", use_container_width=True)
+
+st.sidebar.markdown("---")
+privacy_preview = st.sidebar.checkbox("🛡️ Privacy Shield Preview", value=False)
 
 # ── Layout: 2 Main Columns ───────────────────────────────────────────────────
 col2, col3 = st.columns([1, 1])
@@ -131,11 +136,40 @@ with col2:
 # ── Col 3: Code View ──────────────────────────────────────────────────────────
 with col3:
     st.header("📝 Source Code")
+    
+    current_source = ""
     if st.session_state.audit_result:
-        _, _, source_code = st.session_state.audit_result
-        st.code(source_code, language="python", line_numbers=True)
+        _, _, current_source = st.session_state.audit_result
     elif uploaded_file:
-        source_code = uploaded_file.getvalue().decode("utf-8")
-        st.code(source_code, language="python", line_numbers=True)
+        current_source = uploaded_file.getvalue().decode("utf-8")
+
+    if privacy_preview and current_source:
+        tab_raw, tab_payload = st.tabs(["📄 Raw Code", "🔒 Transmitted Payload"])
+        
+        with tab_raw:
+            st.code(current_source, language="python", line_numbers=True)
+            
+        with tab_payload:
+            st.markdown("""
+            > [!NOTE]  
+            > This view shows exactly what is transmitted to the LLM. 
+            > Bodies are stripped (Skeletonization) and PII is redacted locally.
+            """)
+            
+            # Generate transmitted payload preview
+            # 1. Save temp file for skeletonization
+            tmp_filename = "preview_tmp.py"
+            try:
+                with open(tmp_filename, "w", encoding="utf-8") as f:
+                    f.write(current_source)
+                
+                skeleton = extract_skeleton(tmp_filename) or "# Failed to generate skeleton"
+                redacted_payload = scrub_sensitive_data(skeleton)
+                st.code(redacted_payload, language="python", line_numbers=True)
+            finally:
+                if os.path.exists(tmp_filename):
+                    os.remove(tmp_filename)
+    elif current_source:
+        st.code(current_source, language="python", line_numbers=True)
     else:
         st.info("No code to display.")
