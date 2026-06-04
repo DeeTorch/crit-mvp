@@ -16,7 +16,8 @@ dependencies = [
     "python-dotenv",
     "nest-asyncio",
     "jsonref",
-    "pyyaml"
+    "pyyaml",
+    "streamlit"
 ]
 
 [project.scripts]

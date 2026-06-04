@@ -1,3 +1,4 @@
+streamlit
 instructor
 google-genai
 mistune
