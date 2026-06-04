@@ -4,6 +4,17 @@ CRIT is an enterprise-ready AI-powered code auditing tool that leverages a **Map
 
 ---
 
+## ⚡ Quick Start (Windows)
+
+The fastest way to get CRIT running locally is via the **`START-CRIT.cmd`** one-click installer.
+
+1.  **Run the script**: Double-click `START-CRIT.cmd`.
+2.  **Follow the prompts**: It will automatically create a virtual environment, install all dependencies, and help you set up your `GEMINI_API_KEY`.
+3.  **Desktop Shortcut**: The script will create a **CRIT Dashboard** shortcut on your desktop for future use.
+4.  **Choose your interface**: Launch the Visual Dashboard (Streamlit), the Terminal UI (Textual), or a CLI Self-Audit directly from the script menu.
+
+---
+
 ## 🚀 Overview
 
 CRIT goes beyond simple pattern matching. It uses a multi-stage pipeline to analyze code:
