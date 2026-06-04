@@ -1,0 +1,7 @@
+- id: crit-audit
+  name: CRIT Audit
+  description: "Runs the CRIT Protocol Orchestrator to verify code quality and security."
+  entry: crit-audit
+  language: python
+  types: [python]
+  require_serial: true

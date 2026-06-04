@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=61.0.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "crit-mvp"
+version = "1.0.0"
+description = "CRIT Protocol Orchestrator"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "instructor",
+    "google-genai",
+    "mistune",
+    "pydantic",
+    "python-dotenv",
+    "nest-asyncio",
+    "jsonref"
+]
+
+[project.scripts]
+crit-audit = "crit_orchestrator:main"

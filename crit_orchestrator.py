@@ -29,23 +29,30 @@ from typing import Optional
 import subprocess
 
 
-def get_git_diff_mapping() -> dict[str, set[int]]:
+def get_git_diff_mapping(staged_only: bool = False) -> dict[str, set[int]]:
     """Execute git diff and return a map of filename to set of modified line numbers."""
     try:
         # Get changes in tracked files
-        cmd = ["git", "diff", "HEAD", "--unified=0"]
+        cmd = ["git", "diff", "--unified=0"]
+        if staged_only:
+            cmd.append("--cached")
+        else:
+            cmd.append("HEAD")
+
         result = subprocess.run(cmd, capture_output=True, text=True, check=True)
-        
+
         diff_map: dict[str, set[int]] = {}
         current_file = ""
-        
+
         # Regex for hunk headers: @@ -line,count +line,count @@
         # We only care about the '+' (new/modified) lines
         hunk_header_re = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@")
-        
+
         for line in result.stdout.splitlines():
             if line.startswith("+++ b/"):
                 current_file = line[6:]
+                # Normalize path to match relative path format
+                current_file = os.path.relpath(current_file).replace("\\", "/")
                 if current_file.endswith(".py"):
                     diff_map[current_file] = set()
                 else:
@@ -58,7 +65,7 @@ def get_git_diff_mapping() -> dict[str, set[int]]:
                     # count=0 happens for pure deletions, which we can't map to AST nodes
                     for i in range(count):
                         diff_map[current_file].add(start_line + i)
-        
+
         return diff_map
     except Exception as e:
         log.error(f"Failed to parse git diff: {e}")
@@ -595,24 +602,21 @@ The CRIT pipeline could not parse the target source code because of a syntax err
         log.error(f"Failed to write AST failure report to {report_path}: {e}")
 
 
-async def run_pipeline(
-    source_code: str, filename: str, target_lines: Optional[set[int]] = None
+async def run_pipeline_on_elements(
+    elements: list[dict], target_name: str, is_diff_mode: bool = False
 ) -> tuple[FinalVerdict, list[ElementAnalysis]]:
-    """Execute the full CRIT pipeline: Parse → Map → Reduce."""
+    """Execute the full CRIT pipeline on pre-parsed elements: Map → Reduce."""
     log.info("=" * 60)
     log.info("🚀 CRIT Protocol Orchestrator — Starting Pipeline")
     log.info("   Model:   %s", TARGET_MODEL)
-    log.info("   Target:  %s", filename)
-    if target_lines:
-        log.info("   Mode:    Git Diff Mode (%d modified line(s))", len(target_lines))
+    log.info("   Target:  %s", target_name)
+    if is_diff_mode:
+        log.info("   Mode:    Git Diff/Pre-commit Mode")
     log.info("=" * 60)
-
-    # Phase 1 — AST Parsing (with optional delta mapping)
-    elements = parse_ast_elements(source_code, filename, target_lines=target_lines)
 
     if not elements:
         log.warning(
-            "⚠️ No top-level class or function elements found in source code."
+            "⚠️ No top-level class or function elements found to analyze."
         )
         verdict = FinalVerdict(
             overall_score=10.0,
@@ -667,60 +671,152 @@ def main():
         action="store_true",
         help="Git Diff Mode: only analyze classes/functions modified in the current working tree.",
     )
+    parser.add_argument(
+        "files",
+        nargs="*",
+        help="Positional file arguments passed by pre-commit or CLI.",
+    )
     args = parser.parse_args()
 
     nest_asyncio.apply()
 
-    target_lines = None
-    if args.diff:
-        diff_map = get_git_diff_mapping()
-        if not diff_map:
-            log.warning("Git Diff Mode: No modified line numbers detected in tracked files.")
-        
-        # If --target is provided, filter diff_map to only that file
-        if args.target:
-            # Handle relative paths vs git diff absolute paths
-            target_norm = os.path.relpath(args.target).replace("\\", "/")
-            target_lines = diff_map.get(target_norm)
-            if target_lines is None:
-                log.info(f"Git Diff Mode: No changes detected in target file: {target_norm}")
-                sys.exit(0)
-        else:
-            # If no target, and we are in diff mode, we pick the first modified file
-            if diff_map:
-                filename = next(iter(diff_map))
-                target_lines = diff_map[filename]
-                log.info(f"Git Diff Mode: Auto-selecting first modified file: {filename}")
-                args.target = filename
-            else:
-                log.error("Git Diff Mode: No uncommitted changes found in any .py files.")
+    all_elements = []
+    targets_processed = []
+    has_diff_active = False
+
+    # Scenario A: Positional files passed (Pre-commit or CLI batch run)
+    if args.files:
+        # Pre-commit runs on staged changes specifically
+        diff_map = get_git_diff_mapping(staged_only=True)
+        has_diff_active = True
+
+        for filepath in args.files:
+            if not filepath.endswith(".py"):
+                continue
+            if not os.path.exists(filepath):
+                log.error(f"Target file not found: {filepath}")
                 sys.exit(1)
 
-    source_code = SAMPLE_CODE
-    filename = "<inline_sample>"
-    if args.target:
-        if not os.path.exists(args.target):
-            log.error(f"Target file not found: {args.target}")
-            sys.exit(1)
-        try:
-            with open(args.target, "r", encoding="utf-8") as f:
-                source_code = f.read()
-            filename = args.target
-        except Exception as e:
-            log.error(f"Failed to read target file {args.target}: {e}")
+            filepath_norm = os.path.relpath(filepath).replace("\\", "/")
+            # If the file is not in diff_map, it might be that it has no staged modifications
+            # We fetch empty set so parse_ast_elements filters out all elements
+            target_lines = diff_map.get(filepath_norm, set())
+
+            try:
+                with open(filepath, "r", encoding="utf-8") as f:
+                    source_code = f.read()
+            except Exception as e:
+                log.error(f"Failed to read file {filepath}: {e}")
+                sys.exit(1)
+
+            try:
+                elements = parse_ast_elements(
+                    source_code, filepath, target_lines=target_lines
+                )
+                all_elements.extend(elements)
+                targets_processed.append(filepath)
+            except ASTParsingError as e:
+                export_ast_failure_report(e, filepath)
+                sys.exit(1)
+
+    # Scenario B: Target specified with optional --diff (Legacy Single-File Mode)
+    elif args.target or args.diff:
+        target_lines = None
+        if args.diff:
+            diff_map = get_git_diff_mapping(staged_only=False)
+            has_diff_active = True
+
+            if args.target:
+                target_norm = os.path.relpath(args.target).replace("\\", "/")
+                target_lines = diff_map.get(target_norm)
+                if target_lines is None:
+                    log.info(
+                        f"Git Diff Mode: No changes detected in target file: {target_norm}"
+                    )
+                    sys.exit(0)
+            else:
+                if diff_map:
+                    filename = next(iter(diff_map))
+                    target_lines = diff_map[filename]
+                    log.info(
+                        f"Git Diff Mode: Auto-selecting first modified file: {filename}"
+                    )
+                    args.target = filename
+                else:
+                    log.error(
+                        "Git Diff Mode: No uncommitted changes found in any .py files."
+                    )
+                    sys.exit(1)
+
+        filename = args.target if args.target else "<unknown>"
+        if not os.path.exists(filename):
+            log.error(f"Target file not found: {filename}")
             sys.exit(1)
 
+        try:
+            with open(filename, "r", encoding="utf-8") as f:
+                source_code = f.read()
+        except Exception as e:
+            log.error(f"Failed to read file {filename}: {e}")
+            sys.exit(1)
+
+        try:
+            elements = parse_ast_elements(
+                source_code, filename, target_lines=target_lines
+            )
+            all_elements.extend(elements)
+            targets_processed.append(filename)
+        except ASTParsingError as e:
+            export_ast_failure_report(e, filename)
+            sys.exit(1)
+
+    # Scenario C: Default inline sample code evaluation
+    else:
+        source_code = SAMPLE_CODE
+        filename = "<inline_sample>"
+        try:
+            elements = parse_ast_elements(source_code, filename)
+            all_elements.extend(elements)
+            targets_processed.append(filename)
+        except ASTParsingError as e:
+            export_ast_failure_report(e, filename)
+            sys.exit(1)
+
+    # Compile the final names for output report
+    target_name = (
+        ", ".join(targets_processed) if targets_processed else "<none>"
+    )
+
+    # Execute the pipeline
     try:
-        verdict, analyses = asyncio.run(run_pipeline(source_code, filename, target_lines=target_lines))
-        export_markdown_report(verdict, analyses, filename, is_diff_mode=(target_lines is not None))
+        verdict, analyses = asyncio.run(
+            run_pipeline_on_elements(
+                all_elements, target_name, is_diff_mode=has_diff_active
+            )
+        )
+
+        # Write markdown report
+        export_markdown_report(
+            verdict, analyses, target_name, is_diff_mode=has_diff_active
+        )
 
         # Final Pydantic validation proof
         log.info("✅ Pydantic validation passed — verdict model dump:")
         for k, v in verdict.model_dump().items():
             log.info("   %s: %s", k, v)
-    except ASTParsingError as e:
-        export_ast_failure_report(e, filename)
-        sys.exit(1)
+
+        # Pre-commit return code enforcement
+        if verdict.grade == "F" or verdict.overall_score < 7.0:
+            log.error(
+                f"❌ CRIT Audit Failed (Score: {verdict.overall_score:.1f}, Grade: {verdict.grade}). Blocking commit."
+            )
+            sys.exit(1)
+        else:
+            log.info(
+                f"✅ CRIT Audit Passed (Score: {verdict.overall_score:.1f}, Grade: {verdict.grade})."
+            )
+            sys.exit(0)
+
     except Exception as e:
         log.error(f"Pipeline failed: {e}", exc_info=True)
         sys.exit(1)
