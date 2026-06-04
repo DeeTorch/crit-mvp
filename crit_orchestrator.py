@@ -861,6 +861,11 @@ def main():
         help="Git Diff Mode: only analyze classes/functions modified in the current working tree.",
     )
     parser.add_argument(
+        "--gui",
+        action="store_true",
+        help="Launch the Terminal User Interface (TUI).",
+    )
+    parser.add_argument(
         "files",
         nargs="*",
         help="Positional file arguments passed by pre-commit or CLI.",
@@ -868,6 +873,20 @@ def main():
     args = parser.parse_args()
 
     nest_asyncio.apply()
+
+    # Launch TUI if requested
+    if args.gui:
+        try:
+            from tui import CritTUI
+            app = CritTUI()
+            app.run()
+            sys.exit(0)
+        except ImportError:
+            log.error("Textual is not installed. Please install it with 'pip install textual'.")
+            sys.exit(1)
+        except Exception as e:
+            log.error(f"Failed to launch TUI: {e}")
+            sys.exit(1)
 
     # Load configuration settings
     config = CritConfig.load_from_file()

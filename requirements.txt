@@ -1,6 +1,7 @@
 streamlit
 instructor
 google-genai
+textual
 mistune
 pydantic
 python-dotenv
