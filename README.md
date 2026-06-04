@@ -1,48 +1,82 @@
-# CRIT Protocol Orchestrator (MVP)
+# CRIT: Code Review & Intelligence Tool (MVP)
 
-A Map-Reduce pipeline for parsing, analyzing, and verifying structured documents and source code using Gemini models via the `google-genai` SDK and the `instructor` library for structured Pydantic validation.
+CRIT is an enterprise-ready AI-powered code auditing tool that leverages a **Map-Reduce AST parsing pipeline** and **Gemini 2.5 Pro** to provide high-fidelity, structured feedback on Python codebases.
 
-## Protocol Overview
+---
 
-The **CRIT (Code/Content Review Inquisitor Protocol)** consists of a multi-stage Map-Reduce orchestration process:
-1. **AST Parsing / Chunking**: Input files are parsed into abstract representation nodes (Markdown AST or Python AST) and divided into logical, zero-leak chunks.
-2. **Map Pass (The Pure Empiricist / Evaluator)**: Concurrent async calls are spun up for each chunk. The model extracts individual evidence registries or scores each node element against pre-defined criteria (e.g. Security, Robustness, Readability).
-3. **Reduce Pass (The Structural Inquisitor / Aggregator)**: Mapped evidence logs and per-element scores are compiled and synthesized to generate structural findings, calculate an overall composite score, and produce a final verdict.
-4. **Validation Graph**: Final Pydantic validation guarantees schema compliance, cross-reference lineage, and computed verdict state integrity.
+## 🚀 Overview
 
-## Prerequisites
+CRIT goes beyond simple pattern matching. It uses a multi-stage pipeline to analyze code:
 
-1. **Python 3.10+**
-2. **Google Gemini API Key**: A valid key with access to `gemini-2.5-pro`.
-3. **Local Environment Variables**:
-   Create a `.env` file in the root directory:
-   ```env
-   GEMINI_API_KEY=your_actual_gemini_api_key_here
-   ```
+1.  **AST Parsing Phase**: CRIT parses the target file into an Abstract Syntax Tree (AST) to identify logical elements (classes and functions).
+2.  **Map Phase**: Each identified element is isolated and analyzed independently by Gemini. This ensures high-resolution analysis without context dilution.
+3.  **Reduce Phase**: A separate LLM call aggregates individual element scores into a cohesive **Final Verdict**, including a letter grade (A-F), top strengths, weaknesses, and a single actionable recommendation.
 
-## Installation
+Integration is powered by `google-genai` and `instructor` for strict Pydantic validation of all AI outputs.
 
-Set up a virtual environment and install dependencies:
-```powershell
-python -m venv venv
-.\venv\Scripts\activate
-pip install -r requirements.txt
+---
+
+## 🛡️ Security & Privacy
+
+CRIT is designed with a "Security-First" mindset for enterprise codebases:
+
+*   **XML Prompt Isolation**: User source code is wrapped in `<source_code_to_analyze>` tags. The system prompt includes a strict mandate to treat tagged content as untrusted data, preventing prompt injection attacks from malicious code comments.
+*   **PII Redactor**: Before any report is written to disk, CRIT runs a deterministic **PII Redactor** (`scrub_sensitive_data`). It automatically masks:
+    *   Emails
+    *   IPv4 Addresses
+    *   Secrets in assignments (passwords, API keys, tokens, etc.)
+*   **Structured Redaction**: The LLM is instructed to redact sensitive data from its rationales and summaries as well.
+
+---
+
+## 📦 Installation & Pre-commit Integration
+
+The most effective way to use CRIT is as a local quality gate via `pre-commit`.
+
+### 1. Requirements
+*   Python 3.10+
+*   A valid `GEMINI_API_KEY` in your `.env` file.
+
+### 2. Add to `.pre-commit-config.yaml`
+Add the following block to your project's pre-commit configuration:
+
+```yaml
+repos:
+-   repo: https://github.com/DeeTorch/crit-mvp
+    rev: v1.0.0 # Use the latest version
+    hooks:
+    -   id: crit-audit
+        # CRIT only analyzes the specific files being committed
 ```
 
-*Note: The environment requires `instructor`, `google-genai`, `mistune`, `pydantic`, `python-dotenv`, `nest-asyncio`, and `jsonref`.*
+---
 
-## Running the Orchestrators
+## ⚙️ Configuration (`crit.yaml`)
 
-### 1. Main Content Pipeline (Markdown Spec Evaluator)
-Runs the Markdown AST parser to find structural flaws and inconsistencies:
-```powershell
-$env:PYTHONUTF8=1
-.\venv\Scripts\python.exe crit_protocol_orchestrator.py
+You can customize CRIT's behavior by adding a `crit.yaml` file to your project root. This allows you to set custom quality thresholds, change metrics, and inject team standards.
+
+```yaml
+# Minimum score (0-10) required to pass the audit
+min_pass_score: 7.0
+
+# Quality metrics to evaluate (Map Phase)
+evaluation_metrics:
+  - Readability & Naming
+  - Error Handling & Robustness
+  - Security Practices
+  - Performance & Efficiency
+  - Documentation & Typing
+
+# Team-specific instructions injected into every Map call
+custom_instructions: |
+  - Favor strict PEP-484 typing.
+  - Ensure all exceptions are caught and logged.
+  - Do not use 'assert' for runtime validation.
 ```
 
-### 2. Secondary Code Quality Pipeline (Python Source Evaluator)
-Parses Python source code to evaluate elements (classes, functions) for code quality and security:
-```powershell
-$env:PYTHONUTF8=1
-.\venv\Scripts\python.exe crit_orchestrator.py
-```
+---
+
+## 📈 Roadmap
+
+*   **V2 CI/CD Bot**: Automated PR reviews with inline Markdown comments on GitHub.
+*   **Context Engine**: Import resolution to analyze cross-file dependencies and prevent breaking changes.
