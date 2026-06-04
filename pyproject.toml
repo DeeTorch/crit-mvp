@@ -15,7 +15,8 @@ dependencies = [
     "pydantic",
     "python-dotenv",
     "nest-asyncio",
-    "jsonref"
+    "jsonref",
+    "pyyaml"
 ]
 
 [project.scripts]

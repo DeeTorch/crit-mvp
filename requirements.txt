@@ -5,3 +5,5 @@ pydantic
 python-dotenv
 nest-asyncio
 jsonref
+pyyaml
+

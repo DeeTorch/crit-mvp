@@ -1,0 +1,6 @@
+min_pass_score: 5.0
+evaluation_metrics:
+  - Readability
+  - Robustness
+  - Security
+custom_instructions: "Favor strict typing and clear error handling."
