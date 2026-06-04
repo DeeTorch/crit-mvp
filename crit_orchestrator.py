@@ -26,6 +26,45 @@ from enum import Enum
 from typing import Optional
 
 
+import subprocess
+
+
+def get_git_diff_mapping() -> dict[str, set[int]]:
+    """Execute git diff and return a map of filename to set of modified line numbers."""
+    try:
+        # Get changes in tracked files
+        cmd = ["git", "diff", "HEAD", "--unified=0"]
+        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        
+        diff_map: dict[str, set[int]] = {}
+        current_file = ""
+        
+        # Regex for hunk headers: @@ -line,count +line,count @@
+        # We only care about the '+' (new/modified) lines
+        hunk_header_re = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@")
+        
+        for line in result.stdout.splitlines():
+            if line.startswith("+++ b/"):
+                current_file = line[6:]
+                if current_file.endswith(".py"):
+                    diff_map[current_file] = set()
+                else:
+                    current_file = ""
+            elif current_file and line.startswith("@@"):
+                match = hunk_header_re.match(line)
+                if match:
+                    start_line = int(match.group(1))
+                    count = int(match.group(2)) if match.group(2) else 1
+                    # count=0 happens for pure deletions, which we can't map to AST nodes
+                    for i in range(count):
+                        diff_map[current_file].add(start_line + i)
+        
+        return diff_map
+    except Exception as e:
+        log.error(f"Failed to parse git diff: {e}")
+        return {}
+
+
 def scrub_sensitive_data(text: str) -> str:
     """Redact PII and potential secrets from text using deterministic regex."""
     # Redact Emails
@@ -215,8 +254,10 @@ QUALITY_CRITERIA = [
 ]
 
 
-def parse_ast_elements(source: str, filename: str = "<unknown>") -> list[dict]:
-    """Parse Python source code and extract structural elements."""
+def parse_ast_elements(
+    source: str, filename: str = "<unknown>", target_lines: Optional[set[int]] = None
+) -> list[dict]:
+    """Parse Python source code and extract structural elements, optionally filtering by line."""
     log.info("🌳 AST Parsing Phase — parsing source code")
     try:
         tree = ast.parse(source, filename=filename)
@@ -239,41 +280,52 @@ def parse_ast_elements(source: str, filename: str = "<unknown>") -> list[dict]:
 
     elements: list[dict] = []
     for node in ast.walk(tree):
-        if isinstance(node, ast.ClassDef):
-            methods = [
-                n.name
-                for n in ast.walk(node)
-                if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
-            ]
-            elements.append(
-                {
-                    "name": node.name,
-                    "type": "class",
-                    "line": node.lineno,
-                    "methods": methods,
-                    "source": ast.get_source_segment(source, node) or "",
-                }
-            )
-        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            # Skip methods already captured inside classes
-            if any(
-                node.name in el.get("methods", [])
-                for el in elements
-                if el["type"] == "class"
-            ):
-                continue
-            elements.append(
-                {
-                    "name": node.name,
-                    "type": "function",
-                    "line": node.lineno,
-                    "methods": [],
-                    "source": ast.get_source_segment(source, node) or "",
-                }
-            )
+        if isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+            # Determine boundaries
+            start_line = node.lineno
+            end_line = getattr(node, "end_lineno", start_line)
+
+            # Filter logic: if target_lines is provided, only include if intersection exists
+            if target_lines is not None:
+                element_lines = set(range(start_line, end_line + 1))
+                if not (element_lines & target_lines):
+                    continue
+
+            if isinstance(node, ast.ClassDef):
+                methods = [
+                    n.name
+                    for n in ast.walk(node)
+                    if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+                ]
+                elements.append(
+                    {
+                        "name": node.name,
+                        "type": "class",
+                        "line": start_line,
+                        "methods": methods,
+                        "source": ast.get_source_segment(source, node) or "",
+                    }
+                )
+            else:
+                # Skip methods already captured inside classes
+                if any(
+                    node.name in el.get("methods", [])
+                    for el in elements
+                    if el["type"] == "class"
+                ):
+                    continue
+                elements.append(
+                    {
+                        "name": node.name,
+                        "type": "function",
+                        "line": start_line,
+                        "methods": [],
+                        "source": ast.get_source_segment(source, node) or "",
+                    }
+                )
 
     log.info(
-        "   Found %d top-level element(s): %s",
+        "   Found %d element(s) to analyze: %s",
         len(elements),
         ", ".join(f'{e["type"]}:{e["name"]}' for e in elements),
     )
@@ -415,16 +467,21 @@ def export_markdown_report(
     verdict: FinalVerdict,
     analyses: list[ElementAnalysis],
     target_file: str,
+    is_diff_mode: bool = False,
 ):
     """Generate a beautifully formatted CRIT_Audit_Report.md markdown file."""
     from datetime import datetime
 
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    report_title = "CRIT Diff Quality Audit Report" if is_diff_mode else "CRIT Quality Audit Report"
+    report_path = "CRIT_Diff_Audit_Report.md" if is_diff_mode else "CRIT_Audit_Report.md"
 
-    report_content = f"""# CRIT Quality Audit Report
+    report_content = f"""# {report_title}
 
 **Date of Audit:** {timestamp}  
 **Target File:** `{target_file}`  
+{"> [!IMPORTANT]" if is_diff_mode else ""}
+{"> Only modified code elements (functions/classes) were evaluated in this audit." if is_diff_mode else ""}
 
 ---
 
@@ -471,7 +528,6 @@ def export_markdown_report(
             report_content += f"\n*Summary:* {a.summary}\n\n"
             report_content += "---\n\n"
 
-    report_path = "CRIT_Audit_Report.md"
     try:
         # Final redaction pass before writing to disk
         safe_content = scrub_sensitive_data(report_content)
@@ -540,17 +596,19 @@ The CRIT pipeline could not parse the target source code because of a syntax err
 
 
 async def run_pipeline(
-    source_code: str, filename: str
+    source_code: str, filename: str, target_lines: Optional[set[int]] = None
 ) -> tuple[FinalVerdict, list[ElementAnalysis]]:
     """Execute the full CRIT pipeline: Parse → Map → Reduce."""
     log.info("=" * 60)
     log.info("🚀 CRIT Protocol Orchestrator — Starting Pipeline")
     log.info("   Model:   %s", TARGET_MODEL)
     log.info("   Target:  %s", filename)
+    if target_lines:
+        log.info("   Mode:    Git Diff Mode (%d modified line(s))", len(target_lines))
     log.info("=" * 60)
 
-    # Phase 1 — AST Parsing
-    elements = parse_ast_elements(source_code, filename)
+    # Phase 1 — AST Parsing (with optional delta mapping)
+    elements = parse_ast_elements(source_code, filename, target_lines=target_lines)
 
     if not elements:
         log.warning(
@@ -604,9 +662,39 @@ def main():
         type=str,
         help="Path to the target Python file to analyze. If not provided, inline sample code is used.",
     )
+    parser.add_argument(
+        "--diff",
+        action="store_true",
+        help="Git Diff Mode: only analyze classes/functions modified in the current working tree.",
+    )
     args = parser.parse_args()
 
     nest_asyncio.apply()
+
+    target_lines = None
+    if args.diff:
+        diff_map = get_git_diff_mapping()
+        if not diff_map:
+            log.warning("Git Diff Mode: No modified line numbers detected in tracked files.")
+        
+        # If --target is provided, filter diff_map to only that file
+        if args.target:
+            # Handle relative paths vs git diff absolute paths
+            target_norm = os.path.relpath(args.target).replace("\\", "/")
+            target_lines = diff_map.get(target_norm)
+            if target_lines is None:
+                log.info(f"Git Diff Mode: No changes detected in target file: {target_norm}")
+                sys.exit(0)
+        else:
+            # If no target, and we are in diff mode, we pick the first modified file
+            if diff_map:
+                filename = next(iter(diff_map))
+                target_lines = diff_map[filename]
+                log.info(f"Git Diff Mode: Auto-selecting first modified file: {filename}")
+                args.target = filename
+            else:
+                log.error("Git Diff Mode: No uncommitted changes found in any .py files.")
+                sys.exit(1)
 
     source_code = SAMPLE_CODE
     filename = "<inline_sample>"
@@ -623,8 +711,8 @@ def main():
             sys.exit(1)
 
     try:
-        verdict, analyses = asyncio.run(run_pipeline(source_code, filename))
-        export_markdown_report(verdict, analyses, filename)
+        verdict, analyses = asyncio.run(run_pipeline(source_code, filename, target_lines=target_lines))
+        export_markdown_report(verdict, analyses, filename, is_diff_mode=(target_lines is not None))
 
         # Final Pydantic validation proof
         log.info("✅ Pydantic validation passed — verdict model dump:")
