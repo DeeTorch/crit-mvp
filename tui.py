@@ -153,6 +153,16 @@ class CritTUI(App):
             for a in analyses:
                 report += f"### `{a.element_name}` ({a.element_type})\n"
                 report += f"{a.summary}\n\n"
+                
+                # Render Validated SAST Findings
+                tp_findings = [f for f in a.validated_sast_findings if f.is_true_positive]
+                if tp_findings:
+                    report += "#### 🛡️ [SAST+AI] Confirmed Vulnerabilities\n"
+                    for f in tp_findings:
+                        report += f"- **{f.rule_id}**: {f.message} (Line {f.line})\n"
+                        report += f"  - *Validation:* {f.validation_rationale}\n"
+                    report += "\n"
+
                 for s in a.scores:
                     report += f"- **{s.criterion}**: {s.score} ({s.severity.value}) - {s.rationale}\n"
                 report += "\n"

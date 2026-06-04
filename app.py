@@ -126,6 +126,16 @@ with col2:
         for a in analyses:
             with st.expander(f"`{a.element_name}` ({a.element_type})"):
                 st.write(a.summary)
+                
+                # Render Validated SAST Findings
+                tp_findings = [f for f in a.validated_sast_findings if f.is_true_positive]
+                if tp_findings:
+                    st.error("🛡️ [SAST+AI] Confirmed Vulnerabilities")
+                    for f in tp_findings:
+                        st.markdown(f"**{f.rule_id}**: {f.message} (Line {f.line})")
+                        st.caption(f"Validation: {f.validation_rationale}")
+                    st.divider()
+
                 st.table([
                     {"Criterion": s.criterion, "Score": s.score, "Severity": s.severity.value, "Rationale": s.rationale}
                     for s in a.scores
