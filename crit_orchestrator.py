@@ -39,7 +39,14 @@ def get_git_diff_mapping(staged_only: bool = False) -> dict[str, set[int]]:
         else:
             cmd.append("HEAD")
 
-        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            check=True,
+            encoding="utf-8",
+            errors="replace",
+        )
 
         diff_map: dict[str, set[int]] = {}
         current_file = ""

@@ -1,6 +1,19 @@
 # CRIT: Code Review & Intelligence Tool (MVP)
 
-CRIT is an enterprise-ready AI-powered code auditing tool that leverages a **Map-Reduce AST parsing pipeline** and **Gemini 2.5 Pro** to provide high-fidelity, structured feedback on Python codebases.
+CRIT is an enterprise-ready, AI-powered code auditing tool that leverages a **Map-Reduce AST parsing pipeline** and **Gemini 2.5 Pro** to provide high-fidelity, structured feedback on Python codebases.
+
+---
+
+## 🎯 What & Why
+
+### What is CRIT?
+CRIT (Code Review & Intelligence Tool) is a high-resolution code quality and security analysis engine. By splitting source code into logical AST components (classes, methods, and functions), CRIT maps them to individual, concurrent LLM evaluations (Map Phase) and aggregates the findings into a structured final report (Reduce Phase). It combines static analysis (SAST) with generative AI to validate security findings and evaluate code readability, robustness, and performance.
+
+### Why CRIT?
+* **Semantic Understanding vs. Dumb Linters**: Standard linters (like Ruff, Flake8) check syntax style but miss logical flaws. Traditional SAST tools check patterns but flood developers with false positives. CRIT uses a **dual-engine scanner** that runs local SAST rules and then uses Gemini to validate findings, separating real vulnerabilities (True Positives) from noise (False Positives).
+* **Context Preservation without Dilution**: Feeding an entire codebase into an LLM dilutes its attention and wastes tokens. CRIT uses a **Context Engine** to resolve imports, extract dependency skeletons (structural elements only, stripping functional bodies), and feed the target functions with their precise local context.
+* **Enterprise Privacy & Security**: CRIT implements **local pre-processing** including a local deterministic PII/Secret redactor and **XML prompt isolation**. Malicious code comments cannot perform prompt injection attacks, and sensitive credentials/IPs never leave your local machine.
+* **Developer-First Ecosystem**: Audit your codebase through a rich visual **Streamlit Dashboard**, a terminal-native **Textual TUI**, or a lightweight **CLI** integrated directly into your `pre-commit` hooks or GitHub Actions CI/CD pipeline to block poor code before it hits main.
 
 ---
 
