@@ -1,7 +1,5 @@
-# CRIT: Code Review & Intelligence Tool (MVP)
-
-CRIT is an enterprise-ready, AI-powered code auditing tool that leverages a **Map-Reduce AST parsing pipeline** and **Gemini 2.5 Pro** to provide high-fidelity, structured feedback on Python codebases.
-
+# CRIT: Code Review & Intelligence Tool 
+(MVP)
 ---
 
 ## 🎯 What & Why
